@@ -16,7 +16,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/get-data", async (req, res) => {
-  const { data, error } = await supabase.from("tu_tabla").select("*");
+  const { data, error } = await supabase.from("lineadetiempomarlon").select("*");
 
   if (error) {
     return res.status(500).json({ error: error.message });
