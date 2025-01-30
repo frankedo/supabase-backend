@@ -1,32 +1,34 @@
-import express from "express";
-import cors from "cors";
-import { createClient } from "@supabase/supabase-js";
-import "dotenv/config";
+const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
 const app = express();
-app.use(cors());
-
-// Conectar a Supabase usando variables de entorno
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-app.get("/", (req, res) => {
-  res.json({ message: "API de Supabase funcionando" });
-});
-
-app.get("/get-data", async (req, res) => {
-  const { data, error } = await supabase.from("lineadetiempomarlon").select("*");
-
-  if (error) {
-    return res.status(500).json({ error: error.message });
-  }
-
-  res.json(data);
-});
-
 const PORT = process.env.PORT || 3000;
+
+// 📌 Conectar con Supabase usando variables de entorno
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// 📌 Ruta para obtener los eventos de la base de datos
+app.get('/timeline', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('eventos').select('*');
+
+    if (error) {
+      throw error;
+    }
+
+    res.json(data); // 📌 Enviar datos al frontend
+  } catch (err) {
+    res.status(500).json({ message: 'Error al obtener datos', error: err.message });
+  }
+});
+
+// 📌 Ruta principal
+app.get('/', (req, res) => {
+  res.json({ message: 'API de Supabase funcionando' });
+});
+
+// 📌 Iniciar el servidor
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en el puerto ${PORT}`);
 });
-
