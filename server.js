@@ -5,6 +5,20 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+
+// Habilitar CORS
+app.use(cors());
+
+app.listen(10000, () => {
+  console.log('Servidor corriendo en el puerto 10000');
+});
+
+
+
 // 📌 Conectar con Supabase usando variables de entorno
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
