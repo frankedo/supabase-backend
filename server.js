@@ -11,7 +11,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 // 📌 Ruta para obtener los eventos de la base de datos
 app.get('/timeline', async (req, res) => {
   try {
-    const { data, error } = await supabase.from('eventos').select('*');
+    const { data, error } = await supabase.from('linea_tiempo').select('*');
 
     if (error) {
       throw error;
