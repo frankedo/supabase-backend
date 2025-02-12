@@ -20,10 +20,12 @@ app.use(express.json());
 // 📌 Importar rutas de diferentes tablas
 const timelineRoutes = require('./routes/timeline');
 const lugaresRoutes = require('./routes/lugares_memoria');
+const archivoDigitalRoutes = require('./routes/archivo_digital');
 
 // 📌 Registrar las rutas en la aplicación
 app.use('/timeline', timelineRoutes);
 app.use('/lugares', lugaresRoutes);
+app.use('/archivo_digital', archivoDigitalRoutes); 
 
 // 📌 Ruta principal de prueba
 app.get('/', (req, res) => {
