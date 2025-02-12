@@ -1,7 +1,7 @@
 // 📌 Importar módulos necesarios
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../supabaseClient'); // Importar conexión a Supabase
+const { supabase } = require('../config/supabaseClient'); // Importar conexión a Supabase
 
 // 📌 Ruta para obtener todos los eventos de la línea de tiempo
 router.get('/', async (req, res) => {
