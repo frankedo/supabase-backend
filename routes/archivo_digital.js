@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../supabaseClient'); // Conexión a Supabase es el archivo que esta en el config
+const { supabase } = require('../config/supabaseClient'); // Conexión a Supabase es el archivo que esta en el config
 
 // 📌 Obtener todos los archivos digitales
 router.get('/', async (req, res) => {
