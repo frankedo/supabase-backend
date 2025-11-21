@@ -1,137 +1,104 @@
-// routes/publicaciones.js
-const express = require('express');
+import express from "express";
+import { createClient } from "@supabase/supabase-js";
+import fetch from "node-fetch";
+import pdf from "pdf-poppler";
+import fs from "fs";
+import path from "path";
+
 const router = express.Router();
-const fetch = require('node-fetch');
-const { createClient } = require('@supabase/supabase-js');
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
 
-// lee variables de entorno (defínelas en Render)
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY; // service role mejor si vas a insertar archivos
-const BUCKET_PUBLICACIONES = process.env.BUCKET_PUBLICACIONES || 'publicaciones';
-const BUCKET_PORTADAS = process.env.BUCKET_PORTADAS || 'portadas';
+// 🔐 Conexión a Supabase
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// GET /publicaciones -> lista
-router.get('/', async (req, res) => {
+// 📌 GET — Todas las publicaciones
+router.get("/", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('publicaciones')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data, error } = await supabase.from("publicaciones").select("*");
 
-    if (error) throw error;
+    if (error) return res.status(400).json({ error: error.message });
+
     res.json(data);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err) });
+    res.status(500).json({ error: "Error obteniendo publicaciones" });
   }
 });
 
-// POST /publicaciones -> procesa PDF, genera miniatura y guarda registro
-/**
- * body: {
- *   titulo,
- *   descripcion,
- *   tipo,
- *   fecha,            // yyyy-mm-dd (opcional)
- *   url_pdf           // url pública en Supabase storage
- * }
- */
-router.post('/', async (req, res) => {
+// 📌 POST — Crear nueva publicación con PDF
+router.post("/", async (req, res) => {
   try {
-    const { titulo, descripcion, tipo, fecha, url_pdf } = req.body;
-    if (!titulo || !url_pdf) return res.status(400).json({ error: 'Faltan titulo o url_pdf' });
+    const { titulo, descripcion, tipo, url_pdf } = req.body;
 
-    // 1) descargar PDF a temp
-    const tmpDir = '/tmp';
-    const pdfName = `doc_${Date.now()}.pdf`;
-    const pdfPath = path.join(tmpDir, pdfName);
-
-    const r = await fetch(url_pdf);
-    if (!r.ok) throw new Error('No se pudo descargar el PDF');
-
-    const destStream = fs.createWriteStream(pdfPath);
-    await new Promise((resolve, reject) => {
-      r.body.pipe(destStream);
-      r.body.on('error', reject);
-      destStream.on('finish', resolve);
-    });
-
-    // 2) usar pdftoppm para convertir la primera página a jpg
-    // pdftoppm -f 1 -l 1 -jpeg input.pdf output_prefix
-    const outPrefix = path.join(tmpDir, `thumb_${Date.now()}`);
-    await new Promise((resolve, reject) => {
-      const args = ['-f', '1', '-l', '1', '-jpeg', pdfPath, outPrefix];
-      const p = spawn('pdftoppm', args);
-
-      p.on('error', (err) => reject(err));
-      p.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error('pdftoppm falló con código ' + code));
-      });
-    });
-
-    // pdftoppm genera outPrefix-1.jpg
-    const generatedFile = `${outPrefix}-1.jpg`;
-    if (!fs.existsSync(generatedFile)) throw new Error('No se generó la miniatura');
-
-    // 3) subir miniatura a Supabase Storage
-    const portadaFilename = `portada_${Date.now()}.jpg`;
-    const portadaBuffer = fs.readFileSync(generatedFile);
-
-    const { data: uploadData, error: uploadError } = await supabase
-      .storage
-      .from(BUCKET_PORTADAS)
-      .upload(portadaFilename, portadaBuffer, {
-        contentType: 'image/jpeg',
-        upsert: false
-      });
-
-    if (uploadError) {
-      console.error('uploadError', uploadError);
-      throw uploadError;
+    if (!url_pdf) {
+      return res.status(400).json({ error: "Falta el URL del PDF" });
     }
 
-    // obtener URL pública
-    const { publicUrl } = supabase
-      .storage
-      .from(BUCKET_PORTADAS)
-      .getPublicUrl(portadaFilename);
+    // 1️⃣ Descargar PDF a temporal
+    const tempPdfPath = `/tmp/${Date.now()}-archivo.pdf`;
+    const response = await fetch(url_pdf);
 
-    const url_portada = publicUrl;
+    const buffer = await response.arrayBuffer();
+    fs.writeFileSync(tempPdfPath, Buffer.from(buffer));
 
-    // 4) insertar registro en la tabla publicaciones
-    const insertObj = {
-      titulo,
-      descripcion: descripcion || null,
-      tipo: tipo || null,
-      fecha: fecha || null,
-      url_pdf,
-      url_portada
+    // 2️⃣ Convertir primera página a JPG
+    const outputBase = `/tmp/${Date.now()}-thumb`;
+
+    const pdfOptions = {
+      format: "jpeg",
+      out_dir: "/tmp",
+      out_prefix: path.basename(outputBase),
+      page: 1,
     };
 
-    const { data: inserted, error: insertError } = await supabase
-      .from('publicaciones')
-      .insert([insertObj])
-      .select()
-      .single();
+    await pdf.convert(tempPdfPath, pdfOptions);
 
-    if (insertError) throw insertError;
+    const thumbnailPath = `${outputBase}-1.jpeg`;
 
-    // limpiar archivos temporales
-    try { fs.unlinkSync(pdfPath); } catch (e) {}
-    try { fs.unlinkSync(generatedFile); } catch (e) {}
+    // 3️⃣ Subir miniatura al bucket “portadas”
+    const fileBuffer = fs.readFileSync(thumbnailPath);
 
-    res.json({ ok: true, publicacion: inserted });
+    const uploadResult = await supabase.storage
+      .from("portadas")
+      .upload(`miniaturas/${Date.now()}.jpg`, fileBuffer, {
+        contentType: "image/jpeg",
+        upsert: false,
+      });
 
+    if (uploadResult.error) {
+      return res.status(400).json({ error: uploadResult.error.message });
+    }
+
+    const { data: publicUrl } = supabase.storage
+      .from("portadas")
+      .getPublicUrl(uploadResult.data.path);
+
+    // 4️⃣ Guardar registro en la tabla “publicaciones”
+    const { data, error } = await supabase
+      .from("publicaciones")
+      .insert([
+        {
+          titulo,
+          descripcion,
+          tipo,
+          url_pdf,
+          url_portada: publicUrl.publicUrl,
+          fecha: new Date(),
+        },
+      ])
+      .select("*");
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({
+      mensaje: "Publicación creada exitosamente",
+      publicacion: data[0],
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: String(err) });
+    res.status(500).json({ error: "Error creando la publicación" });
   }
 });
 
-module.exports = router;
+export default router;
