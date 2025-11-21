@@ -3,6 +3,13 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+
+const publicacionesRouter = require('./routes/publicaciones');
+app.use(express.json({ limit: '20mb' })); // permitir bodies más grandes
+app.use('/publicaciones', publicacionesRouter);
+
+
+
 // 📌 Crear una instancia de Express
 const app = express();
 const PORT = process.env.PORT || 3000;
