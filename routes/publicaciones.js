@@ -1,165 +1,203 @@
-// routes/publicaciones.js
-import express from "express";
-import multer from "multer";
-import { createClient } from "@supabase/supabase-js";
-import sharp from "sharp";
+// routes/publicaciones.js  (CommonJS)
+const express = require('express');
+const fetch = require('node-fetch');
+const { createClient } = require('@supabase/supabase-js');
+const multer = require('multer');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
 
-// Variables de entorno (Render)
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// Supabase (usa las env vars que ya configuraste en Render)
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const BUCKET_PUBLICACIONES = process.env.BUCKET_PUBLICACIONES; // publicaciones
-const BUCKET_PORTADAS = process.env.BUCKET_PORTADAS;           // portadas
+const BUCKET_PUBLICACIONES = process.env.BUCKET_PUBLICACIONES || 'publicaciones';
+const BUCKET_PORTADAS = process.env.BUCKET_PORTADAS || 'portadas';
 
-// Multer para recibir archivos
+// multer para recibir archivos en memoria
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ----------------------------
-// 📌 Subir una publicación
+// GET /publicaciones -> lista todas
 // ----------------------------
-router.post(
-  "/upload",
-  upload.single("file"),
-  async (req, res) => {
-    try {
-      const { titulo, descripcion, categoria, fecha } = req.body;
-      const pdfFile = req.file;
-
-      if (!pdfFile) {
-        return res.status(400).json({ error: "Debe enviar un archivo PDF." });
-      }
-
-      const filename = `${Date.now()}-${pdfFile.originalname}`;
-
-      // 1️⃣ SUBIR PDF A SUPABASE
-      const { data: pdfUpload, error: pdfError } = await supabase.storage
-        .from(BUCKET_PUBLICACIONES)
-        .upload(filename, pdfFile.buffer, {
-          contentType: "application/pdf",
-          upsert: false,
-        });
-
-      if (pdfError) throw pdfError;
-
-      const pdfUrl = supabase.storage
-        .from(BUCKET_PUBLICACIONES)
-        .getPublicUrl(filename).data.publicUrl;
-
-      // ----------------------------
-      // 2️⃣ EXTRAER PRIMERA PÁGINA COMO PNG (portada)
-      // ----------------------------
-
-      // Render NO tiene poppler, así que usamos método seguro:
-      // 👉 Usar external API (si deseas), o un placeholder temporal.
-      //
-      // Para avanzar, dejo un generador de portada sencillo:
-      const portadaFilename = filename.replace(".pdf", ".png");
-      const portadaBuffer = await sharp({
-        create: {
-          width: 800,
-          height: 1100,
-          channels: 3,
-          background: "#cccccc",
-        },
-      })
-        .png()
-        .toBuffer();
-
-      // Subir portada
-      const { error: portadaError } = await supabase.storage
-        .from(BUCKET_PORTADAS)
-        .upload(portadaFilename, portadaBuffer, {
-          contentType: "image/png",
-          upsert: false,
-        });
-
-      if (portadaError) throw portadaError;
-
-      const portadaUrl = supabase.storage
-        .from(BUCKET_PORTADAS)
-        .getPublicUrl(portadaFilename).data.publicUrl;
-
-      // ----------------------------
-      // 3️⃣ GUARDAR METADATOS EN LA BD
-      // ----------------------------
-      const { data: dbInsert, error: dbError } = await supabase
-        .from("publicaciones")
-        .insert([
-          {
-            titulo,
-            descripcion,
-            categoria,
-            fecha,
-            pdf_url: pdfUrl,
-            portada_url: portadaUrl,
-          },
-        ]);
-
-      if (dbError) throw dbError;
-
-      res.status(200).json({
-        message: "Publicación subida con éxito",
-        pdfUrl,
-        portadaUrl,
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        error: "Error subiendo la publicación",
-        details: error.message,
-      });
-    }
-  }
-);
-
-// ----------------------------
-// 📌 Listar todas las publicaciones
-// ----------------------------
-router.get("/", async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("publicaciones")
-      .select("*")
-      .order("fecha", { ascending: false });
+      .from('publicaciones')
+      .select('*')
+      .order('created_at', { ascending: false });
 
     if (error) throw error;
-
     res.json(data);
-  } catch (error) {
-    res.status(500).json({
-      error: "No se pudieron obtener las publicaciones",
-      details: error.message,
-    });
+  } catch (err) {
+    console.error("GET /publicaciones error:", err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
 // ----------------------------
-// 📌 Obtener por categoría
+// POST /publicaciones/upload
+// Recibe multipart/form-data con fields: titulo, descripcion, tipo, fecha
+// y file: (key) file  -> sube PDF a Supabase + genera miniatura + guarda registro
 // ----------------------------
-router.get("/categoria/:cat", async (req, res) => {
+router.post('/upload', upload.single('file'), async (req, res) => {
   try {
-    const { cat } = req.params;
+    const { titulo, descripcion, tipo, fecha } = req.body;
+    const file = req.file;
 
-    const { data, error } = await supabase
-      .from("publicaciones")
-      .select("*")
-      .eq("categoria", cat);
+    if (!file) return res.status(400).json({ error: 'Se requiere el archivo PDF en field "file".' });
+    if (!titulo) return res.status(400).json({ error: 'Se requiere el titulo.' });
 
-    if (error) throw error;
+    // filename para el bucket
+    const pdfFilename = `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`;
 
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({
-      error: "No se pudo obtener esta categoría",
-      details: error.message,
+    // 1) subir PDF al bucket publicaciones
+    const { data: uploadPdfData, error: uploadPdfErr } = await supabase
+      .storage
+      .from(BUCKET_PUBLICACIONES)
+      .upload(pdfFilename, file.buffer, { contentType: 'application/pdf', upsert: false });
+
+    if (uploadPdfErr) throw uploadPdfErr;
+
+    const pdfPublic = supabase.storage.from(BUCKET_PUBLICACIONES).getPublicUrl(pdfFilename).data.publicUrl;
+    const url_pdf = pdfPublic;
+
+    // 2) guardar temporalmente en /tmp para procesar
+    const tmpPdfPath = path.join('/tmp', `pdf_${Date.now()}.pdf`);
+    fs.writeFileSync(tmpPdfPath, file.buffer);
+
+    // 3) ejecutar pdftoppm para generar miniatura de la primera página como PNG
+    // pdftoppm -f 1 -l 1 -png input.pdf out_prefix
+    const outPrefix = path.join('/tmp', `thumb_${Date.now()}`);
+    await new Promise((resolve, reject) => {
+      const args = ['-f', '1', '-l', '1', '-png', tmpPdfPath, outPrefix];
+      const p = spawn('pdftoppm', args);
+
+      p.on('error', (err) => reject(err));
+      p.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error('pdftoppm returned code ' + code));
+      });
     });
+
+    const generatedPath = `${outPrefix}-1.png`;
+    if (!fs.existsSync(generatedPath)) throw new Error('No se generó la miniatura');
+
+    // 4) leer miniatura y subir al bucket portadas
+    const thumbBuffer = fs.readFileSync(generatedPath);
+    const thumbName = `miniatura_${Date.now()}.png`;
+
+    const { data: uploadThumbData, error: uploadThumbErr } = await supabase
+      .storage
+      .from(BUCKET_PORTADAS)
+      .upload(thumbName, thumbBuffer, { contentType: 'image/png', upsert: false });
+
+    if (uploadThumbErr) throw uploadThumbErr;
+
+    const thumbPublic = supabase.storage.from(BUCKET_PORTADAS).getPublicUrl(thumbName).data.publicUrl;
+    const url_portada = thumbPublic;
+
+    // 5) insertar registro en la tabla publicaciones
+    const insertObj = {
+      titulo,
+      descripcion: descripcion || null,
+      tipo: tipo || null,
+      fecha: fecha || null,
+      url_pdf,
+      url_portada,
+      created_at: new Date()
+    };
+
+    const { data: insertData, error: insertErr } = await supabase
+      .from('publicaciones')
+      .insert([insertObj])
+      .select()
+      .single();
+
+    if (insertErr) throw insertErr;
+
+    // 6) limpiar temporales
+    try { fs.unlinkSync(tmpPdfPath); } catch(e){}
+    try { fs.unlinkSync(generatedPath); } catch(e){}
+
+    res.json({ ok: true, publicacion: insertData });
+
+  } catch (err) {
+    console.error('POST /publicaciones/upload error:', err);
+    res.status(500).json({ error: String(err) });
   }
 });
 
-export default router;
-  
+// ----------------------------
+// POST /publicaciones/process-url
+// Body JSON: { titulo, descripcion, tipo, fecha, url_pdf }
+// (util si subiste el PDF manualmente a Supabase y solo quieres procesarlo)
+// ----------------------------
+router.post('/process-url', express.json(), async (req, res) => {
+  try {
+    const { titulo, descripcion, tipo, fecha, url_pdf } = req.body;
+    if (!url_pdf || !titulo) return res.status(400).json({ error: 'Faltan url_pdf o titulo' });
+
+    // 1) descargar PDF
+    const resp = await fetch(url_pdf);
+    if (!resp.ok) throw new Error('No se pudo descargar PDF desde la URL');
+    const arrayBuffer = await resp.arrayBuffer();
+    const tmpPdfPath = path.join('/tmp', `pdf_${Date.now()}.pdf`);
+    fs.writeFileSync(tmpPdfPath, Buffer.from(arrayBuffer));
+
+    // 2) generar miniatura con pdftoppm
+    const outPrefix = path.join('/tmp', `thumb_${Date.now()}`);
+    await new Promise((resolve, reject) => {
+      const args = ['-f', '1', '-l', '1', '-png', tmpPdfPath, outPrefix];
+      const p = spawn('pdftoppm', args);
+      p.on('error', (err) => reject(err));
+      p.on('close', (code) => (code === 0 ? resolve() : reject(new Error('pdftoppm err ' + code))));
+    });
+
+    const genPath = `${outPrefix}-1.png`;
+    if (!fs.existsSync(genPath)) throw new Error('Miniatura no generada');
+
+    // 3) subir miniatura a portadas
+    const thumbBuffer = fs.readFileSync(genPath);
+    const thumbName = `miniatura_${Date.now()}.png`;
+
+    const { data: upThumb, error: upThumbErr } = await supabase
+      .storage
+      .from(BUCKET_PORTADAS)
+      .upload(thumbName, thumbBuffer, { contentType: 'image/png', upsert: false });
+
+    if (upThumbErr) throw upThumbErr;
+
+    const thumbPublic = supabase.storage.from(BUCKET_PORTADAS).getPublicUrl(thumbName).data.publicUrl;
+
+    // 4) insertar registro
+    const { data: inserted, error: insertErr } = await supabase
+      .from('publicaciones')
+      .insert([{
+        titulo,
+        descripcion: descripcion || null,
+        tipo: tipo || null,
+        fecha: fecha || null,
+        url_pdf,
+        url_portada: thumbPublic,
+        created_at: new Date()
+      }])
+      .select()
+      .single();
+
+    if (insertErr) throw insertErr;
+
+    try { fs.unlinkSync(tmpPdfPath); } catch(e){}
+    try { fs.unlinkSync(genPath); } catch(e){}
+
+    res.json({ ok: true, publicacion: inserted });
+
+  } catch (err) {
+    console.error('POST /publicaciones/process-url error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+module.exports = router;
