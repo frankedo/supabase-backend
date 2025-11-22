@@ -3,36 +3,31 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-
-const publicacionesRouter = require('./routes/publicaciones');
-app.use(express.json({ limit: '20mb' })); // permitir bodies más grandes
-app.use('/publicaciones', publicacionesRouter);
-
-
-
 // 📌 Crear una instancia de Express
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 📌 Habilitar CORS para permitir solicitudes desde el frontend en Netlify
 app.use(cors({
-    origin: 'https://corpomemorias.netlify.app', // Reemplaza con el dominio de tu frontend
+    origin: 'https://corpomemorias.netlify.app',
     methods: 'GET,POST',
     allowedHeaders: 'Content-Type,Authorization'
 }));
 
-// 📌 Middleware para procesar datos JSON
-app.use(express.json());
+// 📌 Middleware para procesar bodies JSON grandes
+app.use(express.json({ limit: '20mb' }));
 
 // 📌 Importar rutas de diferentes tablas
 const timelineRoutes = require('./routes/timeline');
 const lugaresRoutes = require('./routes/lugares_memoria');
 const archivoDigitalRoutes = require('./routes/archivo_digital');
+const publicacionesRouter = require('./routes/publicaciones');
 
 // 📌 Registrar las rutas en la aplicación
 app.use('/timeline', timelineRoutes);
 app.use('/lugares', lugaresRoutes);
-app.use('/archivo_digital', archivoDigitalRoutes); 
+app.use('/archivo_digital', archivoDigitalRoutes);
+app.use('/publicaciones', publicacionesRouter);
 
 // 📌 Ruta principal de prueba
 app.get('/', (req, res) => {
