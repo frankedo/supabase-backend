@@ -1,21 +1,28 @@
-# Dockerfile para Render - incluye poppler-utils (pdftoppm)
-FROM node:18-bullseye
+FROM debian:bookworm
+
+# Instalar Node.js
+RUN apt-get update && \
+    apt-get install -y curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs
 
 # Instalar poppler-utils
-RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y poppler-utils
 
-# Directorio de la app
-WORKDIR /usr/src/app
+# Crear directorio de la app
+WORKDIR /app
 
-# Copiar package.json e instalar deps
+# Copiar package.json
 COPY package*.json ./
-RUN npm install --production
 
-# Copiar todo el código
+# Instalar dependencias
+RUN yarn install --production
+
+# Copiar el resto del proyecto
 COPY . .
 
-# Puerto (ajusta si tu server usa otro)
-EXPOSE 3000
+# Exponer puerto Render
+EXPOSE 10000
 
-# Ejecutar
+# Comando para iniciar
 CMD ["node", "server.js"]
