@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: supabase-backend
+    env: node
+    region: oregon
+    buildCommand: bash render-build.sh && yarn install
+    startCommand: node server.js
