@@ -2,72 +2,102 @@ const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const { exec } = require('child_process');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
+require('dotenv').config();
 
+// Inicializar Supabase
 const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_KEY
 );
 
-// Endpoint para generar portada automáticamente
-router.post('/publicaciones/portada', async (req, res) => {
+// Ruta: Obtener todas las publicaciones
+router.get('/', async (req, res) => {
     try {
-        const { nombre_pdf } = req.body; // Ej: "CARTA DE INTENCION.pdf"
-
-        // Descargar el PDF desde Supabase
-        const { data, error: downloadError } = await supabase
-            .storage
+        const { data, error } = await supabase
             .from('publicaciones')
-            .download(nombre_pdf);
+            .select('*')
+            .order('id', { ascending: true });
 
-        if (downloadError) throw downloadError;
+        if (error) throw error;
 
-        const pdfPath = path.join('/tmp', nombre_pdf);
-        const arrayBuffer = await data.arrayBuffer();
-        fs.writeFileSync(pdfPath, Buffer.from(arrayBuffer));
+        res.json(data);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al obtener publicaciones' });
+    }
+});
 
-        // Generar portada usando pdftoppm (PNG del primer página)
-        const portadaPath = pdfPath.replace('.pdf', '.png');
-        exec(`pdftoppm -png -f 1 -singlefile "${pdfPath}" "${pdfPath.replace('.pdf', '')}"`, async (err) => {
-            if (err) return res.status(500).json({ error: err.message });
+// Ruta: Generar o devolver portada de PDF
+router.get('/portada/:id', async (req, res) => {
+    const { id } = req.params;
 
-            // Subir la portada al bucket 'portadas'
-            const portadaFile = fs.readFileSync(portadaPath);
-            const { data: uploadData, error: uploadError } = await supabase
+    try {
+        // 1️⃣ Obtener la publicación por ID
+        const { data: publicaciones, error } = await supabase
+            .from('publicaciones')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error || !publicaciones) {
+            return res.status(404).json({ error: 'Publicación no encontrada' });
+        }
+
+        const pdfUrl = publicaciones.url_pdf;
+        const nombrePortada = `${id}.png`; // nombre de la imagen en bucket "portadas"
+
+        // 2️⃣ Revisar si la portada ya existe
+        const { data: portadaExistente } = await supabase
+            .storage
+            .from('portadas')
+            .download(nombrePortada)
+            .catch(() => null);
+
+        if (portadaExistente) {
+            // Si ya existe, redirigimos al URL público
+            const urlPublica = supabase
                 .storage
                 .from('portadas')
-                .upload(nombre_pdf.replace('.pdf', '.png'), portadaFile, { upsert: true });
+                .getPublicUrl(nombrePortada).data.publicUrl;
+            return res.redirect(urlPublica);
+        }
 
-            if (uploadError) throw uploadError;
+        // 3️⃣ Descargar PDF temporalmente
+        const tmpPdfPath = path.join('/tmp', `${id}.pdf`);
+        const tmpPngPath = path.join('/tmp', nombrePortada);
 
-            const url_portada = `https://ppidrwpyhoqqeoesvdbk.supabase.co/storage/v1/object/public/portadas/${nombre_pdf.replace('.pdf', '.png')}`;
+        const pdfData = await fetch(pdfUrl);
+        const buffer = Buffer.from(await pdfData.arrayBuffer());
+        fs.writeFileSync(tmpPdfPath, buffer);
 
-            // Actualizar tabla publicacion con la portada
-            const { data: publicaciones, error: selectError } = await supabase
-                .from('publicaciones')
-                .select('id')
-                .ilike('url_pdf', `%${nombre_pdf}%`)
-                .limit(1);
+        // 4️⃣ Convertir PDF a PNG usando poppler-utils
+        exec(`pdftoppm -png -singlefile ${tmpPdfPath} ${tmpPngPath.replace('.png','')}`, async (err) => {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ error: 'Error al generar portada' });
+            }
 
-            if (selectError) throw selectError;
-            if (publicaciones.length === 0) return res.status(404).json({ error: 'No se encontró la publicación' });
+            // 5️⃣ Subir PNG al bucket "portadas"
+            const imageBuffer = fs.readFileSync(tmpPngPath);
+            await supabase
+                .storage
+                .from('portadas')
+                .upload(nombrePortada, imageBuffer, { upsert: true });
 
-            const id = publicaciones[0].id;
+            // 6️⃣ Obtener URL pública y enviar redirección
+            const urlPublica = supabase
+                .storage
+                .from('portadas')
+                .getPublicUrl(nombrePortada).data.publicUrl;
 
-            const { error: updateError } = await supabase
-                .from('publicaciones')
-                .update({ url_portada })
-                .eq('id', id);
-
-            if (updateError) throw updateError;
-
-            res.json({ message: 'Portada generada correctamente', url_portada });
+            res.redirect(urlPublica);
         });
 
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: error.message });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error interno en la ruta de portada' });
     }
 });
 
