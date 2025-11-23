@@ -1,28 +1,23 @@
-FROM debian:bookworm
+# Imagen base de Node
+FROM node:18-slim
 
-# Instalar Node.js
-RUN apt-get update && \
-    apt-get install -y curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs
-
-# Instalar poppler-utils
-RUN apt-get update && apt-get install -y poppler-utils
+# Instalar poppler-utils para convertir PDFs
+RUN apt-get update && apt-get install -y poppler-utils && apt-get clean
 
 # Crear directorio de la app
 WORKDIR /app
 
-# Copiar package.json
+# Copiar package.json y package-lock.json
 COPY package*.json ./
 
-# Instalar dependencias
-RUN yarn install --production
+# Instalar dependencias en modo producción
+RUN npm install --omit=dev
 
-# Copiar el resto del proyecto
+# Copiar todo el código del proyecto
 COPY . .
 
-# Exponer puerto Render
+# Exponer el puerto 10000 (Render lo respeta automáticamente)
 EXPOSE 10000
 
-# Comando para iniciar
+# Comando para iniciar tu servidor
 CMD ["node", "server.js"]
