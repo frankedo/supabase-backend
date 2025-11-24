@@ -1,178 +1,137 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Publicaciones | Corpomemorias</title>
+// routes/publicaciones.js
+const express = require('express');
+const router = express.Router();
+const fetch = require('node-fetch');
+const { createClient } = require('@supabase/supabase-js');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
-    <!-- Bootstrap -->
-    <link rel="stylesheet" href="../assets/css/creative-design.css">
+// lee variables de entorno (defínelas en Render)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY; // service role mejor si vas a insertar archivos
+const BUCKET_PUBLICACIONES = process.env.BUCKET_PUBLICACIONES || 'publicaciones';
+const BUCKET_PORTADAS = process.env.BUCKET_PORTADAS || 'portadas';
 
-    <!-- Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+// GET /publicaciones -> lista
+router.get('/', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('publicaciones')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    <style>
-        /* GRID */
-        #publicacionesGrid{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err) });
+  }
+});
 
-        /* CARD */
-        .pub-card{
-            background: #fff;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-            overflow: hidden;
-            transition: .2s;
-        }
-        .pub-card:hover{
-            transform: scale(1.02);
-        }
+// POST /publicaciones -> procesa PDF, genera miniatura y guarda registro
+/**
+ * body: {
+ *   titulo,
+ *   descripcion,
+ *   tipo,
+ *   fecha,            // yyyy-mm-dd (opcional)
+ *   url_pdf           // url pública en Supabase storage
+ * }
+ */
+router.post('/', async (req, res) => {
+  try {
+    const { titulo, descripcion, tipo, fecha, url_pdf } = req.body;
+    if (!titulo || !url_pdf) return res.status(400).json({ error: 'Faltan titulo o url_pdf' });
 
-        /* Miniatura PDF */
-        .pdf-thumb{
-            width: 100%;
-            height: 260px;
-            background: #f4f4f4;
-            border-bottom: 1px solid #ddd;
-        }
-        .pdf-thumb iframe{
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
+    // 1) descargar PDF a temp
+    const tmpDir = '/tmp';
+    const pdfName = `doc_${Date.now()}.pdf`;
+    const pdfPath = path.join(tmpDir, pdfName);
 
-        .pub-body{
-            padding: 12px;
-        }
+    const r = await fetch(url_pdf);
+    if (!r.ok) throw new Error('No se pudo descargar el PDF');
 
-        .pub-title{
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 6px;
-            color: #222;
-        }
+    const destStream = fs.createWriteStream(pdfPath);
+    await new Promise((resolve, reject) => {
+      r.body.pipe(destStream);
+      r.body.on('error', reject);
+      destStream.on('finish', resolve);
+    });
 
-        .pub-desc{
-            font-size: 0.9rem;
-            color: #555;
-            margin-bottom: 6px;
-            min-height: 40px;
-        }
+    // 2) usar pdftoppm para convertir la primera página a jpg
+    // pdftoppm -f 1 -l 1 -jpeg input.pdf output_prefix
+    const outPrefix = path.join(tmpDir, `thumb_${Date.now()}`);
+    await new Promise((resolve, reject) => {
+      const args = ['-f', '1', '-l', '1', '-jpeg', pdfPath, outPrefix];
+      const p = spawn('pdftoppm', args);
 
-        .pub-date{
-            font-size: 0.8rem;
-            color: #777;
-        }
+      p.on('error', (err) => reject(err));
+      p.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error('pdftoppm falló con código ' + code));
+      });
+    });
 
-        .buttons{
-            margin-top: 10px;
-            display: flex;
-            gap: 6px;
-        }
+    // pdftoppm genera outPrefix-1.jpg
+    const generatedFile = `${outPrefix}-1.jpg`;
+    if (!fs.existsSync(generatedFile)) throw new Error('No se generó la miniatura');
 
-        .btn-yellow{
-            background: #fbc02d;
-            border: none;
-            color: #000;
-            padding: 6px 10px;
-            font-size: 0.8rem;
-            border-radius: 6px;
-        }
-    </style>
-</head>
+    // 3) subir miniatura a Supabase Storage
+    const portadaFilename = `portada_${Date.now()}.jpg`;
+    const portadaBuffer = fs.readFileSync(generatedFile);
 
-<body>
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from(BUCKET_PORTADAS)
+      .upload(portadaFilename, portadaBuffer, {
+        contentType: 'image/jpeg',
+        upsert: false
+      });
 
-<header class="header">
-    <div class="overlay"></div>
-    <div class="header-content">
-        <h3>Archivo de Publicaciones</h3>
-        <h6>Informes, Boletines, Revistas, Libros, Talleres</h6>
-    </div>
-</header>
+    if (uploadError) {
+      console.error('uploadError', uploadError);
+      throw uploadError;
+    }
 
-<div class="container mt-4">
+    // obtener URL pública
+    const { publicUrl } = supabase
+      .storage
+      .from(BUCKET_PORTADAS)
+      .getPublicUrl(portadaFilename);
 
-    <!-- FILTRO -->
-    <div class="row mb-3">
-        <div class="col-md-4">
-            <select id="filterPublicaciones" class="form-control">
-                <option value="all">Todas</option>
-                <option value="informe">Informes</option>
-                <option value="boletin">Boletines</option>
-                <option value="revista">Revistas</option>
-                <option value="libro">Libros</option>
-                <option value="taller">Talleres</option>
-            </select>
-        </div>
-    </div>
+    const url_portada = publicUrl;
 
-    <!-- GRID -->
-    <div id="publicacionesGrid"></div>
+    // 4) insertar registro en la tabla publicaciones
+    const insertObj = {
+      titulo,
+      descripcion: descripcion || null,
+      tipo: tipo || null,
+      fecha: fecha || null,
+      url_pdf,
+      url_portada
+    };
 
-</div>
+    const { data: inserted, error: insertError } = await supabase
+      .from('publicaciones')
+      .insert([insertObj])
+      .select()
+      .single();
 
+    if (insertError) throw insertError;
 
-<script>
-const backendUrl = "https://supabase-backend.onrender.com"; // tu backend
+    // limpiar archivos temporales
+    try { fs.unlinkSync(pdfPath); } catch (e) {}
+    try { fs.unlinkSync(generatedFile); } catch (e) {}
 
-async function cargarPublicaciones(filtro = "all"){
-    const res = await fetch(`${backendUrl}/publicaciones`);
-    const data = await res.json();
+    res.json({ ok: true, publicacion: inserted });
 
-    const grid = document.getElementById("publicacionesGrid");
-    grid.innerHTML = "";
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err) });
+  }
+});
 
-    data
-        .filter(pub => filtro === "all" || pub.tipo === filtro)
-        .forEach(pub => {
-            const fecha = new Date(pub.fecha).getFullYear();
-
-            const card = `
-                <div class="pub-card">
-
-                    <!-- Miniatura desde el PDF -->
-                    <div class="pdf-thumb">
-                        <iframe src="https://docs.google.com/gview?embedded=1&url=${pub.url}#page=1"></iframe>
-                    </div>
-
-                    <div class="pub-body">
-                        <div class="pub-title">${pub.titulo}</div>
-                        <div class="pub-desc">${pub.descripcion || 'Sin descripción'}</div>
-                        <div class="pub-date">📅 ${fecha}</div>
-
-                        <div class="buttons">
-                            <a href="${pub.url}" target="_blank" class="btn-yellow">Leer PDF</a>
-
-                            <button class="btn-yellow" onclick="sharePub('${pub.titulo}','${pub.url}')">
-                                Compartir
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-
-            grid.innerHTML += card;
-        });
-}
-
-function sharePub(titulo, url){
-    const text = `${titulo} - ${url}`;
-    const shareUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
-    window.open(shareUrl, "_blank");
-}
-
-document.getElementById("filterPublicaciones")
-        .addEventListener("change", e => cargarPublicaciones(e.target.value));
-
-cargarPublicaciones();
-</script>
-
-</body>
-</html>
+module.exports = router;
