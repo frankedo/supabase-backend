@@ -1,23 +1,25 @@
 # Imagen base de Node
 FROM node:18-slim
 
-# Instalar poppler-utils para convertir PDFs
+# Instalar poppler-utils para generar miniaturas de PDF
 RUN apt-get update && apt-get install -y poppler-utils && apt-get clean
 
-# Crear directorio de la app
+# Crear directorio principal
 WORKDIR /app
 
 # Copiar package.json y package-lock.json
 COPY package*.json ./
 
-# Instalar dependencias en modo producción
+# Instalar dependencias (modo producción)
 RUN npm install --omit=dev
 
-# Copiar todo el código del proyecto
+# Copiar todo el código del backend
 COPY . .
 
-# Exponer el puerto 10000 (Render lo respeta automáticamente)
+# Exponer el puerto que Render asigna (Render lo respeta)
 EXPOSE 10000
 
-# Comando para iniciar tu servidor
+# Comando para lanzar el backend
 CMD ["node", "server.js"]
+
+
