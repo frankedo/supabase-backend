@@ -22,12 +22,15 @@ const timelineRoutes = require('./routes/timeline');
 const lugaresRoutes = require('./routes/lugares_memoria');
 const archivoDigitalRoutes = require('./routes/archivo_digital');
 const publicacionesRouter = require('./routes/publicaciones');
+const galeriaRoutes = require('./routes/galeria_pictorica');
 
 // 📌 Registrar las rutas en la aplicación
 app.use('/timeline', timelineRoutes);
 app.use('/lugares', lugaresRoutes);
 app.use('/archivo_digital', archivoDigitalRoutes);
 app.use('/publicaciones', publicacionesRouter);
+app.use('/galeria_pictorica', galeriaRoutes);
+
 
 // 📌 Ruta principal de prueba
 app.get('/', (req, res) => {
