@@ -23,6 +23,9 @@ const lugaresRoutes = require('./routes/lugares_memoria');
 const archivoDigitalRoutes = require('./routes/archivo_digital');
 const publicacionesRouter = require('./routes/publicaciones');
 const galeriaRoutes = require('./routes/galeria_pictorica');
+const piezasRoutes = require('./routes/piezas');
+
+
 
 // 📌 Registrar las rutas en la aplicación
 app.use('/timeline', timelineRoutes);
@@ -30,6 +33,9 @@ app.use('/lugares', lugaresRoutes);
 app.use('/archivo_digital', archivoDigitalRoutes);
 app.use('/publicaciones', publicacionesRouter);
 app.use('/galeria_pictorica', galeriaRoutes);
+app.use('/api/piezas', piezasRoutes);
+
+
 
 
 // 📌 Ruta principal de prueba
